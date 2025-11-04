@@ -2,7 +2,12 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
+try:
+    import plotly.express as px
+    USE_PLOTLY = True
+except Exception:
+    px = None
+    USE_PLOTLY = False
 from datetime import datetime, date
 from dateutil import parser as dateparser
 import re
@@ -208,6 +213,9 @@ def main():
     st.title("Pinterest Growing Trends — APAC Insightboard")
     st.caption("Interactive weekly trends with growth detection, auto-annotations, and optional news context")
 
+    if not USE_PLOTLY:
+        st.warning("Plotly is not installed in this environment. Showing fallback charts. To fix on Streamlit Cloud: ensure **requirements.txt** (root) includes `plotly==5.23.0`, then **Reboot app**.", icon="⚠️")
+
     DEFAULT_PATH = "/mnt/data/Pinterest Growing Trends APAC_ 25 Jul - 17 Oct 2025 - Sheet1.csv"
 
     with st.sidebar:
@@ -268,12 +276,18 @@ def main():
         if heat_df.shape[0] > 100:
             heat_df = heat_df.head(100)
             st.info("Showing first 100 rows for performance. Use filters to narrow further.")
-        fig = px.imshow(heat_df.values, 
-                        labels=dict(x="Week", y="Trend • Market", color="Volume (norm)"),
-                        x=[w.strftime("%Y-%m-%d") for w in heat_df.columns],
-                        y=[f"{i[0]} • {i[1]}" for i in heat_df.index],
-                        aspect="auto")
-        st.plotly_chart(fig, use_container_width=True)
+        if USE_PLOTLY:
+            fig = px.imshow(heat_df.values,
+                            labels=dict(x="Week", y="Trend • Market", color="Volume (norm)"),
+                            x=[w.strftime("%Y-%m-%d") for w in heat_df.columns],
+                            y=[f"{i[0]} • {i[1]}" for i in heat_df.index],
+                            aspect="auto")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            styled = heat_df.copy()
+            styled.index = [f"{i[0]} • {i[1]}" for i in styled.index]
+            styled.columns = [w.strftime("%Y-%m-%d") for w in styled.columns]
+            st.dataframe(styled.style.background_gradient(axis=None))
 
         st.markdown("### Compare Trends")
         topN = st.slider("Select top N trends (by Score) to plot", 3, 15, 5)
@@ -287,8 +301,13 @@ def main():
             mask = mask | ((plot_df["Trend"]==tr) & (plot_df["Market"]==mk))
         plot_df = plot_df[mask]
         if len(plot_df):
-            fig2 = px.line(plot_df, x="Week", y="Volume_norm", color=plot_df["Trend"] + " • " + plot_df["Market"], markers=True)
-            st.plotly_chart(fig2, use_container_width=True)
+            if USE_PLOTLY:
+                fig2 = px.line(plot_df, x="Week", y="Volume_norm", color=plot_df["Trend"] + " • " + plot_df["Market"], markers=True)
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                # Streamlit fallback: one combined chart with pivoted columns
+                piv = plot_df.pivot_table(index="Week", columns=plot_df["Trend"] + " • " + plot_df["Market"], values="Volume_norm", aggfunc="mean")
+                st.line_chart(piv)
 
         st.markdown("### Auto-Annotate Spikes (File-based)")
         st.caption("Heuristic annotations using APAC events catalog (keywords + date windows + market filters).")
