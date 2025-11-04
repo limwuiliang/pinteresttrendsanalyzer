@@ -1,3 +1,4 @@
+# Streamlit Cloud will install from this file at the repo root
 streamlit>=1.50
 pandas>=2.2
 numpy>=1.26
