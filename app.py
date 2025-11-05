@@ -5,13 +5,12 @@ import plotly.express as px
 from datetime import datetime
 import feedparser
 import requests
-from io import StringIO
 
 st.set_page_config(page_title="Pinterest Growing Trends: Insightboard", layout="wide")
 
 # ---- HEADER ----
 st.title("📈 Pinterest Growing Trends: Insightboard")
-st.caption("Visualize and explore Pinterest's Growing Trends by market, compare patterns, and tie spikes to real-world events and news.")
+st.caption("Visualize Pinterest's Growing Trends by market, compare patterns, and connect search spikes to real-world events and news.")
 
 # ---- FILE UPLOAD ----
 uploaded_file = st.file_uploader("📤 Upload your Pinterest 'Growing Trends' CSV", type=["csv"])
@@ -20,36 +19,31 @@ if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
     st.success("File uploaded successfully!")
 
-    # Identify date columns (week columns F→R style)
+    # Identify date columns (weekly columns like F–R)
     date_cols = [c for c in df.columns if any(x in c for x in ["/", "-", "202"])]
     meta_cols = [c for c in df.columns if c not in date_cols]
 
-    # Melt to long format
-    long_df = df.melt(id_vars=meta_cols, value_vars=date_cols,
-                      var_name="Week", value_name="Volume_norm")
-
-    # Convert week to datetime
+    # Melt into long format
+    long_df = df.melt(id_vars=meta_cols, value_vars=date_cols, var_name="Week", value_name="Volume_norm")
     long_df["Week"] = pd.to_datetime(long_df["Week"], errors="coerce")
 
-    # Convert market and trend columns
+    # Detect key columns
     if "Trend" not in long_df.columns:
-        # Try to find similar columns (Pinterest export may call it "keyword" or "search term")
         trend_col = next((c for c in long_df.columns if "trend" in c.lower() or "keyword" in c.lower()), None)
         if trend_col:
             long_df.rename(columns={trend_col: "Trend"}, inplace=True)
         else:
-            st.error("Could not find a column for 'Trend' or 'Keyword'. Please rename one of the columns.")
+            st.error("No 'Trend' or 'Keyword' column found. Please rename appropriately.")
+            st.stop()
+
     if "Market" not in long_df.columns:
-        st.error("Please include a 'Market' column in your CSV (e.g., JP, US, IN).")
+        st.error("Missing 'Market' column. Please add one (e.g., US, JP, IN).")
         st.stop()
 
-    # Drop missing dates or volumes
+    long_df["Volume_norm"] = pd.to_numeric(long_df["Volume_norm"], errors="coerce")
     long_df = long_df.dropna(subset=["Week", "Volume_norm"])
 
-    # Ensure numeric
-    long_df["Volume_norm"] = pd.to_numeric(long_df["Volume_norm"], errors="coerce")
-
-    # Sidebar filters
+    # ---- SIDEBAR FILTERS ----
     with st.sidebar:
         st.header("🔍 Filters")
 
@@ -57,51 +51,67 @@ if uploaded_file is not None:
         market_sel = st.multiselect("Markets", markets, default=markets)
 
         trends = sorted(long_df["Trend"].dropna().unique().tolist())
-        trend_sel = st.multiselect("Trends", trends, default=trends[:5])
+        trend_sel = st.multiselect("Trends (optional)", trends, default=trends[:5])
 
-        # Default date range = min/max in data
         min_date, max_date = long_df["Week"].min(), long_df["Week"].max()
         date_range = st.date_input(
-            "Date range", [min_date, max_date],
-            min_value=min_date, max_value=max_date
+            "Date range", [min_date, max_date], min_value=min_date, max_value=max_date
         )
 
-    # Filter by selection
-    mask = (
-        long_df["Market"].isin(market_sel)
-        & long_df["Trend"].isin(trend_sel)
+    # Apply filters
+    view = long_df[
+        (long_df["Market"].isin(market_sel))
         & (long_df["Week"].between(pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])))
+    ]
+    if trend_sel:
+        view = view[view["Trend"].isin(trend_sel)]
+
+    # ---- COMPARE TRENDS (Top N version) ----
+    st.markdown("### Compare Trends")
+    spikes = (
+        view.groupby(["Trend", "Market"], as_index=False)["Volume_norm"]
+        .mean()
+        .sort_values("Volume_norm", ascending=False)
     )
-    filtered = long_df[mask]
-
-    # ---- COMPARE TRENDS ----
-    st.subheader("📊 Compare Trends Over Time")
-
-    if len(filtered):
-        fig2 = px.line(
-            filtered,
-            x="Week",
-            y="Volume_norm",
-            color=filtered["Trend"] + " • " + filtered["Market"],
-            markers=True,
-            title="Normalized Trend Search Volume Over Time"
+    topN = st.slider("Top N", 3, 15, 5)
+    top_pairs = spikes.head(topN)[["Trend", "Market"]].drop_duplicates().values.tolist()
+    if not top_pairs and len(view):
+        top_pairs = (
+            list(
+                view.groupby(["Trend", "Market"])["Volume_norm"]
+                .mean()
+                .sort_values(ascending=False)
+                .head(topN)
+                .index
+            )
         )
-        fig2.update_layout(legend_title_text="Trend • Market", height=500)
-        st.plotly_chart(fig2, use_container_width=True)
+
+    p = view.copy()
+    mask = pd.Series(False, index=p.index)
+    for tr, mk in top_pairs:
+        mask = mask | ((p["Trend"] == tr) & (p["Market"] == mk))
+    p = p[mask]
+
+    if len(p):
+        line = p.pivot_table(
+            index="Week",
+            columns=p["Trend"] + " • " + p["Market"],
+            values="Volume_norm",
+            aggfunc="mean",
+        )
+        st.line_chart(line)
     else:
-        st.info("No data available for the selected filters.")
+        st.info("No data available for selected filters.")
 
     # ---- HEATMAP ----
     st.subheader("🔥 Weekly Heatmap")
-
-    if len(filtered):
+    if len(view):
         heat_df = (
-            filtered.pivot_table(
+            view.pivot_table(
                 index=["Trend", "Market"], columns="Week", values="Volume_norm", aggfunc="mean"
             )
             .fillna(0)
         )
-
         fig = px.imshow(
             heat_df.values,
             labels=dict(x="Week", y="Trend • Market", color="Volume (norm)"),
@@ -110,12 +120,9 @@ if uploaded_file is not None:
             aspect="auto",
         )
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Upload your file to see the heatmap.")
 
     # ---- NEWS CONTEXT (always visible) ----
     st.subheader("🗞️ News / Event Context")
-
     with st.expander("View latest related headlines"):
         keyword = st.text_input("Enter a keyword or trend:", "")
         selected_market = st.selectbox("Optional market filter:", ["All"] + markets)
@@ -128,7 +135,7 @@ if uploaded_file is not None:
                 if feed.entries:
                     for entry in feed.entries[:10]:
                         st.markdown(f"**[{entry.title}]({entry.link})**")
-                        if hasattr(entry, 'published'):
+                        if hasattr(entry, "published"):
                             st.caption(entry.published)
                         st.write("---")
                 else:
@@ -139,7 +146,7 @@ if uploaded_file is not None:
     # ---- EXPORT ----
     st.download_button(
         label="💾 Download filtered data as CSV",
-        data=filtered.to_csv(index=False),
+        data=view.to_csv(index=False),
         file_name="pinterest_trends_filtered.csv",
         mime="text/csv",
     )
@@ -148,9 +155,9 @@ if uploaded_file is not None:
     st.markdown("---")
     st.markdown(
         '<div style="text-align:center; font-size:14px;">Created by: '
-        '<a href="https://www.linkedin.com/in/limwuiliang/" target="_blank" style="color:#0072b1; text-decoration:none;">Wui-Liang Lim</a>'
-        '</div>',
-        unsafe_allow_html=True
+        '<a href="https://www.linkedin.com/in/limwuiliang/" target="_blank" '
+        'style="color:#0072b1; text-decoration:none;">Wui-Liang Lim</a></div>',
+        unsafe_allow_html=True,
     )
 
 else:
