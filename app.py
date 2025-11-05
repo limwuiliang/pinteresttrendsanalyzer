@@ -1,329 +1,168 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime, date
-from dateutil import parser as dateparser
-
-# Plotly (optional) ------------------------------------------------------------
-try:
-    import plotly.express as px
-    USE_PLOTLY = True
-except Exception:
-    px = None
-    USE_PLOTLY = False
-
-# Lightweight Google News RSS (no API key) ------------------------------------
-try:
-    import feedparser
-    import urllib.parse
-except Exception:
-    feedparser = None
+import plotly.express as px
+from datetime import datetime
+import feedparser
+import requests
+from io import StringIO
 
 st.set_page_config(page_title="Pinterest Growing Trends: Insightboard", layout="wide")
 
-# =============================================================================
-# Data helpers
-# =============================================================================
-@st.cache_data
-def load_data(uploaded_file=None):
-    """Load CSV from upload; auto-detect week columns that look like dates."""
-    if uploaded_file is None:
-        return None, None, None
+# ---- HEADER ----
+st.title("📈 Pinterest Growing Trends: Insightboard")
+st.caption("Visualize and explore Pinterest's Growing Trends by market, compare patterns, and tie spikes to real-world events and news.")
 
+# ---- FILE UPLOAD ----
+uploaded_file = st.file_uploader("📤 Upload your Pinterest 'Growing Trends' CSV", type=["csv"])
+
+if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
+    st.success("File uploaded successfully!")
 
-    # Detect weekly/date columns vs metadata
-    date_cols, meta_cols = [], []
-    for c in df.columns:
-        try:
-            dateparser.parse(str(c), dayfirst=False, yearfirst=False, fuzzy=False)
-            if pd.api.types.is_numeric_dtype(df[c]):
-                date_cols.append(c)
-            else:
-                meta_cols.append(c)
-        except Exception:
-            meta_cols.append(c)
+    # Identify date columns (week columns F→R style)
+    date_cols = [c for c in df.columns if any(x in c for x in ["/", "-", "202"])]
+    meta_cols = [c for c in df.columns if c not in date_cols]
 
-    if len(date_cols) == 0:
-        # Fallback: last N numeric columns as weeks
-        num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-        date_cols = num_cols[-10:]
-        meta_cols = [c for c in df.columns if c not in date_cols]
+    # Melt to long format
+    long_df = df.melt(id_vars=meta_cols, value_vars=date_cols,
+                      var_name="Week", value_name="Volume_norm")
 
-    try:
-        date_cols = sorted(date_cols, key=lambda x: dateparser.parse(str(x)))
-    except Exception:
-        pass
+    # Convert week to datetime
+    long_df["Week"] = pd.to_datetime(long_df["Week"], errors="coerce")
 
-    return df, meta_cols, date_cols
+    # Convert market and trend columns
+    if "Trend" not in long_df.columns:
+        # Try to find similar columns (Pinterest export may call it "keyword" or "search term")
+        trend_col = next((c for c in long_df.columns if "trend" in c.lower() or "keyword" in c.lower()), None)
+        if trend_col:
+            long_df.rename(columns={trend_col: "Trend"}, inplace=True)
+        else:
+            st.error("Could not find a column for 'Trend' or 'Keyword'. Please rename one of the columns.")
+    if "Market" not in long_df.columns:
+        st.error("Please include a 'Market' column in your CSV (e.g., JP, US, IN).")
+        st.stop()
 
+    # Drop missing dates or volumes
+    long_df = long_df.dropna(subset=["Week", "Volume_norm"])
 
-def tidy_data(df, meta_cols, date_cols):
-    """Wide -> long, compute normalized volume."""
-    long = df.melt(id_vars=meta_cols, value_vars=date_cols, var_name="Week", value_name="Volume")
+    # Ensure numeric
+    long_df["Volume_norm"] = pd.to_numeric(long_df["Volume_norm"], errors="coerce")
 
-    def safe_parse(x):
-        try:
-            return dateparser.parse(str(x)).date()
-        except Exception:
-            return None
-
-    long["Week"] = long["Week"].apply(safe_parse)
-    long = long.dropna(subset=["Week"])
-
-    # Expect required columns
-    if "Trend" not in long.columns or "Market" not in long.columns:
-        raise ValueError("CSV must include 'Trend' and 'Market' columns.")
-
-    long["Volume_raw"] = long["Volume"]
-    long["Volume_norm"] = long.groupby(["Trend", "Market"])["Volume_raw"].transform(
-        lambda s: (s - s.min()) / (s.max() - s.min()) * 100 if (s.max() > s.min()) else 0.0
-    )
-
-    return long
-
-
-# =============================================================================
-# News / Events (always visible)
-# =============================================================================
-def google_news_rss(query: str, market: str = None, from_date=None, to_date=None, max_items=12):
-    """Fetch headlines via Google News RSS. No API key required."""
-    if feedparser is None or not query:
-        return []
-    q = query if (not market or market.lower() in query.lower()) else f"{query} {market}"
-    encoded = urllib.parse.quote_plus(q)
-    url = f"https://news.google.com/rss/search?q={encoded}&hl=en-US&gl=US&ceid=US:en"
-    try:
-        feed = feedparser.parse(url)
-    except Exception:
-        return []
-    items = []
-    for e in feed.entries[:max_items * 2]:
-        pub = None
-        try:
-            if hasattr(e, "published_parsed") and e.published_parsed:
-                pub = datetime(*e.published_parsed[:6]).date()
-        except Exception:
-            pub = None
-        if from_date and pub and pub < from_date:
-            continue
-        if to_date and pub and pub > to_date:
-            continue
-        items.append({
-            "title": getattr(e, "title", ""),
-            "link": getattr(e, "link", ""),
-            "published": str(pub) if pub else "",
-            "source": getattr(getattr(e, "source", {}), "title", ""),
-        })
-    return items[:max_items]
-
-
-# =============================================================================
-# UI
-# =============================================================================
-def main():
-    st.title("Pinterest Growing Trends: Insightboard")
-    if not USE_PLOTLY:
-        st.warning(
-            "Plotly isn't installed — using fallback visuals. "
-            "To enable Plotly charts on Streamlit Cloud, ensure `requirements.txt` at repo root includes `plotly` and redeploy.",
-            icon="⚠️"
-        )
-
-    with st.expander("First-time instructions"):
-        st.markdown(
-            """
-**How to get the CSV from Pinterest Trends (Growing Trends):**
-
-1. Visit **[trends.pinterest.com](https://trends.pinterest.com/)**.  
-2. Under **Trends Type**, select **Growing Trends**.  
-3. Under **Region**, select **one** region you’re interested in (Pinterest currently exports one region at a time).  
-4. Export/download the **CSV**.  
-5. In your spreadsheet, create a **column named `Market`** and fill it with the **country code or region label** that matches the export (e.g., `US`, `JP`, `AU`, `SG`, etc.).  
-6. If you want to compare **multiple regions**, repeat steps 2–5 for each region and **paste the rows into the same sheet** (keeping the same columns, and `Market` set accordingly).  
-
-**Expected columns in the CSV you upload here:**
-- `Trend`, `Market`, and weekly columns whose headers are date-like (e.g., `7/25/25`, `8/1/25`, ...).  
-- Other columns (e.g., `Weekly change`, `Monthly change`) are fine — they’ll be treated as metadata.
-"""
-        )
-
-    # --- Sidebar: file upload -------------------------------------------------
+    # Sidebar filters
     with st.sidebar:
-        st.header("Data")
-        uploaded = st.file_uploader("Upload your Pinterest Growing Trends CSV", type=["csv"])
-        if uploaded is None:
-            st.info("Upload a CSV to begin.")
-            st.stop()
+        st.header("🔍 Filters")
 
-    # --- Load & shape data ----------------------------------------------------
-    try:
-        df, meta_cols, date_cols = load_data(uploaded)
-    except Exception as e:
-        st.error(f"Failed to read CSV: {e}")
-        st.stop()
+        markets = sorted(long_df["Market"].dropna().unique().tolist())
+        market_sel = st.multiselect("Markets", markets, default=markets)
 
-    try:
-        long = tidy_data(df, meta_cols, date_cols)
-    except Exception as e:
-        st.error(str(e))
-        st.stop()
+        trends = sorted(long_df["Trend"].dropna().unique().tolist())
+        trend_sel = st.multiselect("Trends", trends, default=trends[:5])
 
-    # --- Filters: all markets shown and selected by default -------------------
-    all_markets = sorted(long["Market"].dropna().unique().tolist())
-    if not all_markets:
-        st.error("No values found in 'Market' column. Please ensure you've added it.")
-        st.stop()
-
-    col_filters = st.container()
-    with col_filters:
-        c1, c2 = st.columns([2, 3])
-
-        with c1:
-            selected_markets = st.multiselect(
-                "Markets",
-                options=all_markets,
-                default=all_markets  # select ALL by default
-            )
-
-        # Full date range default (from the uploaded sheet)
-        min_week, max_week = long["Week"].min(), long["Week"].max()
-        with c2:
-            dr = st.slider(
-                "Date range",
-                min_value=min_week,
-                max_value=max_week,
-                value=(min_week, max_week)  # default to full range
-            )
-
-    # Apply filter subset
-    view = long.query("Market in @selected_markets and @dr[0] <= Week <= @dr[1]")
-
-    # --- Compare Trends (first main section; replaces 'Top Weekly Spikes') ----
-    st.markdown("### Compare Trends")
-    c3, c4 = st.columns([3, 2])
-
-    with c3:
-        # Optional keyword filter for trends
-        trend_query = st.text_input("Find keywords (regex ok)", "")
-        trends_all = sorted(view["Trend"].dropna().unique().tolist())
-
-        if trend_query:
-            trends_filtered = [t for t in trends_all if pd.Series([t]).str.contains(trend_query, case=False, regex=True).item()]
-        else:
-            trends_filtered = trends_all
-
-        # Choose which trends to plot; default top 5 by mean Volume_norm in view
-        top_default = (
-            view[view["Trend"].isin(trends_filtered)]
-            .groupby("Trend")["Volume_norm"]
-            .mean()
-            .sort_values(ascending=False)
-            .head(5)
-            .index
-            .tolist()
-        )
-        selected_trends = st.multiselect(
-            "Trends to plot",
-            options=trends_filtered,
-            default=top_default
+        # Default date range = min/max in data
+        min_date, max_date = long_df["Week"].min(), long_df["Week"].max()
+        date_range = st.date_input(
+            "Date range", [min_date, max_date],
+            min_value=min_date, max_value=max_date
         )
 
-        plot_df = view[view["Trend"].isin(selected_trends)].copy()
+    # Filter by selection
+    mask = (
+        long_df["Market"].isin(market_sel)
+        & long_df["Trend"].isin(trend_sel)
+        & (long_df["Week"].between(pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])))
+    )
+    filtered = long_df[mask]
 
-        if plot_df.empty:
-            st.info("No data matches the current filters. Try selecting some trends.")
-        else:
-            if USE_PLOTLY:
-                # Multi-series by Trend • Market
-                plot_df["Series"] = plot_df["Trend"] + " • " + plot_df["Market"]
-                fig = px.line(
-                    plot_df, x="Week", y="Volume_norm", color="Series", markers=True,
-                    labels={"Volume_norm": "Volume (normalized)"}
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                piv = plot_df.pivot_table(
-                    index="Week",
-                    columns=plot_df["Trend"] + " • " + plot_df["Market"],
-                    values="Volume_norm",
-                    aggfunc="mean"
-                )
-                st.line_chart(piv)
+    # ---- COMPARE TRENDS ----
+    st.subheader("📊 Compare Trends Over Time")
 
-    with c4:
-        st.caption("Tip: Use keyword search to narrow trend names, then select multiple to compare. Normalization rescales each trend within its own history to 0–100 to reveal shape and timing of growth.")
+    if len(filtered):
+        fig2 = px.line(
+            filtered,
+            x="Week",
+            y="Volume_norm",
+            color=filtered["Trend"] + " • " + filtered["Market"],
+            markers=True,
+            title="Normalized Trend Search Volume Over Time"
+        )
+        fig2.update_layout(legend_title_text="Trend • Market", height=500)
+        st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.info("No data available for the selected filters.")
 
-    # --- Heatmap (optional but useful; keep after Compare Trends) -------------
-    st.markdown("### Weekly Heatmap (Normalized Volume)")
-    heat_df = view.pivot_table(
-        index=["Trend", "Market"], columns="Week",
-        values="Volume_norm", aggfunc="mean"
-    ).fillna(0)
+    # ---- HEATMAP ----
+    st.subheader("🔥 Weekly Heatmap")
 
-    if heat_df.shape[0] > 200:
-        heat_df = heat_df.head(200)
-        st.info("Showing first 200 rows for performance. Use filters to narrow further.")
+    if len(filtered):
+        heat_df = (
+            filtered.pivot_table(
+                index=["Trend", "Market"], columns="Week", values="Volume_norm", aggfunc="mean"
+            )
+            .fillna(0)
+        )
 
-    if USE_PLOTLY:
-        fig_hm = px.imshow(
+        fig = px.imshow(
             heat_df.values,
             labels=dict(x="Week", y="Trend • Market", color="Volume (norm)"),
             x=[w.strftime("%Y-%m-%d") for w in heat_df.columns],
             y=[f"{i[0]} • {i[1]}" for i in heat_df.index],
-            aspect="auto"
+            aspect="auto",
         )
-        st.plotly_chart(fig_hm, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
     else:
-        styled = heat_df.copy()
-        styled.index = [f"{i[0]} • {i[1]}" for i in styled.index]
-        styled.columns = [w.strftime("%Y-%m-%d") for w in styled.columns]
-        st.dataframe(styled.style.background_gradient(axis=None))
+        st.info("Upload your file to see the heatmap.")
 
-    # --- News / Event Context (ALWAYS visible) --------------------------------
-    st.markdown("### News / Event Context")
-    n1, n2 = st.columns([2, 1])
+    # ---- NEWS CONTEXT (always visible) ----
+    st.subheader("🗞️ News / Event Context")
 
-    with n1:
-        # Sensible defaults from current selection:
-        default_kw = selected_trends[0] if selected_trends else (trends_all[0] if trends_all else "")
-        kw = st.text_input("Keyword for news search", default_kw)
-        mk = st.selectbox("Market for news bias (optional)", options=["(none)"] + all_markets)
-        mk_val = None if mk == "(none)" else mk
-        news_from, news_to = st.date_input("News date window", (dr[0], dr[1]))
+    with st.expander("View latest related headlines"):
+        keyword = st.text_input("Enter a keyword or trend:", "")
+        selected_market = st.selectbox("Optional market filter:", ["All"] + markets)
 
-        if st.button("Fetch Headlines"):
-            items = google_news_rss(kw, mk_val, from_date=news_from, to_date=news_to, max_items=12)
-            if not items:
-                if feedparser is None:
-                    st.info("RSS parser not available in this environment. The app will still work without headlines.")
+        if keyword:
+            try:
+                query = keyword if selected_market == "All" else f"{keyword} {selected_market}"
+                feed_url = f"https://news.google.com/rss/search?q={requests.utils.quote(query)}&hl=en-US&gl=US&ceid=US:en"
+                feed = feedparser.parse(feed_url)
+                if feed.entries:
+                    for entry in feed.entries[:10]:
+                        st.markdown(f"**[{entry.title}]({entry.link})**")
+                        if hasattr(entry, 'published'):
+                            st.caption(entry.published)
+                        st.write("---")
                 else:
-                    st.info("No headlines found. Try a broader keyword or wider date window.")
-            else:
-                for it in items:
-                    st.markdown(
-                        f"- [{it['title']}]({it['link']})  \n"
-                        f"  <small>{it.get('published','')} · {it.get('source','')}</small>",
-                        unsafe_allow_html=True,
-                    )
+                    st.info("No recent news found for that query.")
+            except Exception as e:
+                st.error(f"Error fetching news: {e}")
 
-    with n2:
-        st.caption(
-            "This panel helps you connect spikes to real-world events and news. "
-            "Use a trend keyword and (optionally) a market to bias search results, constrained to your selected date range."
-        )
-
-    # --- Export ---------------------------------------------------------------
-    st.markdown("---")
-    st.markdown("### Export Filtered Data")
-    exp_cols = ["Trend", "Market", "Week", "Volume_raw", "Volume_norm"]
-    csv_bytes = view.sort_values(["Trend", "Market", "Week"])[exp_cols].to_csv(index=False).encode("utf-8")
+    # ---- EXPORT ----
     st.download_button(
-        "Download filtered data (CSV)",
-        data=csv_bytes,
+        label="💾 Download filtered data as CSV",
+        data=filtered.to_csv(index=False),
         file_name="pinterest_trends_filtered.csv",
-        mime="text/csv"
+        mime="text/csv",
     )
 
-if __name__ == "__main__":
-    main()
+    # ---- FOOTER ----
+    st.markdown("---")
+    st.markdown(
+        '<div style="text-align:center; font-size:14px;">Created by: '
+        '<a href="https://www.linkedin.com/in/limwuiliang/" target="_blank" style="color:#0072b1; text-decoration:none;">Wui-Liang Lim</a>'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+else:
+    st.info(
+        """
+        👋 **Welcome to Pinterest Growing Trends: Insightboard**
+
+        **To get started:**
+        1. Visit [trends.pinterest.com](https://trends.pinterest.com)
+        2. Under *Trends Type*, select **Growing Trends**
+        3. Choose a *Region* and export the CSV
+        4. Add a column called **Market** in your sheet (e.g., US, JP, IN)
+        5. If comparing multiple regions, repeat the export for each region, paste all into one sheet, and upload it here.
+        """
+    )
