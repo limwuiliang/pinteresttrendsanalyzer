@@ -1,32 +1,54 @@
+Pinterest Growing Trends: Insightboard
+======================================
 
-# Pinterest Growing Trends — APAC Insightboard (Streamlit)
+A Streamlit dashboard for exploring and visualizing Pinterest “Growing Trends” CSV exports, comparing multiple markets, and tying rising search trends to current news and events — all in one interactive view.
 
-An interactive dashboard for visualizing Pinterest Growing Trends weekly data and tying spikes to real-world events.
 
-## Features
-- CSV uploader (or bundled sample)
-- Filters by market, keyword search, date range
-- Heatmap of weekly normalized volumes
-- Spike detection (WoW% + rolling z-score)
-- Multi-series trend comparison
-- **News/Event context** via Google News RSS (no API key)
-- Manual tagging of spikes + CSV export
+Overview
+--------
+Pinterest Growing Trends: Insightboard lets you:
+- Upload one or more Pinterest “Growing Trends” CSVs.
+- Visualize normalized trend data over time using interactive charts and a weekly heatmap.
+- Compare growth patterns across markets, regions, or categories.
+- Instantly search related news headlines to understand what’s driving each spike.
+- Export filtered and annotated data for use in reports or slides.
 
-## Run locally
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
 
-## Deploy to Streamlit Cloud
-1. Push `app.py` and `requirements.txt` to a GitHub repo.
-2. Add your CSV in the repo or upload at runtime.
-3. Create a new app in Streamlit Cloud and point to `app.py`.
-4. Optional: open network access is required for Google News RSS.
+How to Use (First-Time Setup)
+-----------------------------
+1. Go to https://trends.pinterest.com/
+2. Under “Trends Type”, choose “Growing Trends”.
+3. Under “Region”, select the market or country you’re interested in. (Pinterest currently exports one region at a time.)
+4. Click “Export CSV” to download the file.
+5. Open your CSV in Excel or Google Sheets and add a new column called “Market”, filling it with the country code or region name (e.g., US, JP, AU, IN, BR, etc.).
+6. To compare multiple regions:
+   - Repeat steps 2–5 for each region.
+   - Copy and paste all rows into a single sheet with the same column headers.
+7. Save your combined file as a .csv and upload it to the app.
 
-## Data expectations
-- Columns: `Trend`, `Market`, weekly columns with date-like headers (e.g., `7/25/25`, `8/1/25`, ...).
-- Non-date metadata columns like `Weekly change`, `Monthly change` can be present.
 
-## Event linkage
-The app uses Google News RSS to surface likely related headlines for a selected keyword/market and date window. For higher precision, you can integrate NewsAPI, GDELT, or custom curated event lists per market.
+Features
+--------
+- Compare Trends: Select multiple trend keywords and compare their normalized growth curves over time.
+- Heatmap View: Quickly see trend intensity by week and market, color-coded from low to high volume.
+- Markets Filter: Automatically detects all “Market” values in your CSV and selects them all by default.
+- Date Range Filter: Defaults to the full date span present in your data.
+- News / Event Context: Always visible — enter a trend keyword and optional market to fetch related news headlines from Google News RSS.
+- CSV Export: Download the currently filtered data as pinterest_trends_filtered.csv for external analysis.
+
+
+Running the App
+---------------
+Local:
+1. Install dependencies:
+   pip install -r requirements.txt
+2. Run Streamlit:
+   streamlit run app.py
+3. Open your browser at http://localhost:8501
+
+Streamlit Cloud (Public):
+1. Push these files to a public GitHub repository:
+   - app.py
+   - requirements.txt
+   - README.txt (optional)
+2. Go to https://share.streamlit.io → “Deploy
