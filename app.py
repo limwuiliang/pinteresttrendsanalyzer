@@ -154,7 +154,7 @@ def main():
 2. Under **Trends Type**, select **Growing Trends**.  
 3. Under **Region**, select **one** region you’re interested in (Pinterest currently exports one region at a time).  
 4. Export/download the **CSV**.  
-5. In your spreadsheet, remove the 'Rank" column. Create a **column named `Market`** and fill it with the **country code or region label** that matches the export (e.g., `US`, `JP`, `AU`, `SG`, etc.).  
+5. In your spreadsheet, remove the **Rank** column. Create a **column named `Market`** and fill it with the **country code or region label** that matches the export (e.g., `US`, `JP`, `AU`, `SG`, etc.).  
 6. If you want to compare **multiple regions**, repeat steps 2–5 for each region and **paste the rows into the same sheet** (keeping the same columns, and `Market` set accordingly).  
 
 **Expected columns in the CSV you upload here:**
