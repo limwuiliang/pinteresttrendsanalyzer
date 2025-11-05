@@ -161,8 +161,9 @@ else:
         **To get started:**
         1. Visit [trends.pinterest.com](https://trends.pinterest.com)
         2. Under *Trends Type*, select **Growing Trends**
-        3. Choose a *Region* and export the CSV
-        4. Add a column called **Market** in your sheet (e.g., US, JP, IN)
-        5. If comparing multiple regions, repeat the export for each region, paste all into one sheet, and upload it here.
+        3. Choose a *Region* (Pinterest only allows selection of one Region as of now) and export the CSV. 
+        4. Remove **Rank** column
+        5. Add a column called **Market** (e.g., US, JP, IN)
+        6. If comparing multiple regions, repeat the export for each region, paste all into one sheet, and upload it here.
         """
     )
